@@ -274,7 +274,7 @@ class Agent:
         try:
             # 1. Load task from pre-baked local repo.
             task_id = LocalTaskId(path=TASK_REPO_DIR / task_name)
-            task_dirs = self.task_client.download_tasks(
+            task_dirs = await self.task_client.download_tasks(
                 [task_id], output_dir=TASKS_DIR
             )
             task = Task(task_dirs[0])
