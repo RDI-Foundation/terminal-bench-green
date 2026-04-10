@@ -36,22 +36,24 @@ class DoodDockerEnvironment(DockerEnvironment):
         cwd: str | None = None,
         env: dict[str, str] | None = None,
         timeout_sec: int | None = None,
+        user: str | int | None = None,
     ) -> ExecResult:
         env = {**(env or {}), "DEBIAN_FRONTEND": "noninteractive"}
-        return await super().exec(command, cwd=cwd, env=env, timeout_sec=timeout_sec)
+        return await super().exec(command, cwd=cwd, env=env, timeout_sec=timeout_sec, user=user)
 
     async def start(self, force_build: bool):
         self._use_prebuilt = not force_build and self.task_env_config.docker_image
 
         if not self._use_prebuilt:
-            image_name = self._env_vars.main_image_name
-            lock = self._image_build_locks.setdefault(image_name, asyncio.Lock())
+            lock = self._image_build_locks.setdefault(
+                self.environment_name, asyncio.Lock()
+            )
             async with lock:
                 await self._run_docker_compose_command(["build"])
 
         # Clean up only this project's containers.
         try:
-            await self._run_docker_compose_command(["down"])
+            await self._run_docker_compose_command(["down", "--remove-orphans"])
         except RuntimeError:
             pass
 
