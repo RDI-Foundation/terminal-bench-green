@@ -274,10 +274,10 @@ class Agent:
         try:
             # 1. Load task from pre-baked local repo.
             task_id = LocalTaskId(path=TASK_REPO_DIR / task_name)
-            task_dirs = await self.task_client.download_tasks(
+            batch = await self.task_client.download_tasks(
                 [task_id], output_dir=TASKS_DIR
             )
-            task = Task(task_dirs[0])
+            task = Task(batch.paths[0])
 
             # 2. Create trial paths
             trial_dir = TRIALS_DIR / session_id
