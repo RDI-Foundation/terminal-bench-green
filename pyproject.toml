@@ -1,11 +1,14 @@
 [project]
-name = "green-agent-template"
+name = "terminal-bench-green"
 version = "0.1.0"
-description = "A template for A2A green agents"
+description = "Green agent for terminal-bench 2.0 benchmark evaluations"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "a2a-sdk[http-server]>=0.3.20",
+    "brotli>=1.1.0",
+    "harbor>=0.1.44",
+    "httpx>=0.28.1",
     "pydantic>=2.12.5",
     "uvicorn>=0.38.0",
 ]

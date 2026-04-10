@@ -13,6 +13,7 @@ from a2a.utils import (
     new_task,
 )
 
+from harbor.environments.base import BaseEnvironment
 from agent import Agent
 
 
@@ -25,8 +26,9 @@ TERMINAL_STATES = {
 
 
 class Executor(AgentExecutor):
-    def __init__(self):
-        self.agents: dict[str, Agent] = {} # context_id to agent instance
+    def __init__(self, exec_sessions: dict[str, BaseEnvironment]):
+        self.exec_sessions = exec_sessions
+        self.agents: dict[str, Agent] = {}  # context_id to agent instance
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         msg = context.message
@@ -44,7 +46,7 @@ class Executor(AgentExecutor):
         context_id = task.context_id
         agent = self.agents.get(context_id)
         if not agent:
-            agent = Agent()
+            agent = Agent(self.exec_sessions)
             self.agents[context_id] = agent
 
         updater = TaskUpdater(event_queue, task.id, context_id)

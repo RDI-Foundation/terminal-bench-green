@@ -1,10 +1,26 @@
 from typing import Any
+from pathlib import Path
+import re
+import sys
 import pytest
 import httpx
 from uuid import uuid4
 
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
 from a2a.types import Message, Part, Role, TextPart
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from agent import (
+    _format_verifier_failure,
+    _get_shard_task_names,
+    _get_task_names,
+    _missing_task_config_message,
+    _normalize_config,
+    _read_text_tail,
+)
+from harbor.models.trial.paths import TrialPaths
+from harbor.verifier.verifier import RewardFileNotFoundError
 
 
 # A2A validation helpers - adapted from https://github.com/a2aproject/a2a-inspector/blob/main/backend/validators.py
@@ -196,4 +212,100 @@ async def test_message(agent, streaming):
     assert events, "Agent should respond with at least one event"
     assert not all_errors, f"Message validation failed:\n" + "\n".join(all_errors)
 
-# Add your custom tests here
+
+def test_normalize_config_accepts_nested_assessment_config():
+    config = {
+        "assessment_config": {
+            "tasks": ["fix-git", "fix-make"],
+            "exclude": ["fix-make"],
+            "oracle": True,
+            "num_shards": 2,
+            "shard_index": 0,
+        }
+    }
+
+    normalized = _normalize_config(config)
+
+    assert normalized == config["assessment_config"]
+    assert _get_task_names(normalized) == ["fix-git"]
+
+
+def test_get_shard_task_names_round_robin():
+    task_names = ["t0", "t1", "t2", "t3", "t4", "t5", "t6"]
+
+    assert _get_shard_task_names(task_names, {"num_shards": 3, "shard_index": 0}) == [
+        "t0",
+        "t3",
+        "t6",
+    ]
+    assert _get_shard_task_names(task_names, {"num_shards": 3, "shard_index": 1}) == [
+        "t1",
+        "t4",
+    ]
+    assert _get_shard_task_names(task_names, {"num_shards": 3, "shard_index": 2}) == [
+        "t2",
+        "t5",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ({"num_shards": 0, "shard_index": 0}, "'num_shards' must be >= 1"),
+        ({"num_shards": 2, "shard_index": -1}, "'shard_index' must be in [0, num_shards)"),
+        ({"num_shards": 2, "shard_index": 2}, "'shard_index' must be in [0, num_shards)"),
+    ],
+)
+def test_get_shard_task_names_rejects_invalid_config(config, message):
+    with pytest.raises(ValueError, match=re.escape(message)):
+        _get_shard_task_names(["t0", "t1"], config)
+
+
+def test_missing_task_config_message_mentions_received_keys():
+    message = _missing_task_config_message({"assessment_config": {}, "oracle": False})
+
+    assert "assessment_config" in message
+    assert "oracle" in message
+
+
+def test_read_text_tail_returns_suffix_for_long_files(tmp_path):
+    log_path = tmp_path / "test-stdout.txt"
+    log_path.write_text("a" * 5000 + "tail")
+
+    tail = _read_text_tail(log_path, max_chars=8)
+
+    assert tail == "...\naaaatail"
+
+
+def test_format_verifier_failure_includes_test_output(tmp_path):
+    trial_paths = TrialPaths(trial_dir=tmp_path / "trial")
+    trial_paths.mkdir()
+    trial_paths.test_stdout_path.write_text("line 1\nline 2\nreward missing")
+
+    message = _format_verifier_failure(
+        "build-pmars",
+        RewardFileNotFoundError("No reward file found"),
+        trial_paths,
+    )
+
+    assert "Verifier failed for build-pmars" in message
+    assert "No reward file found" in message
+    assert "test.sh output:" in message
+    assert "reward missing" in message
+
+
+def test_format_verifier_failure_omits_empty_test_output(tmp_path):
+    trial_paths = TrialPaths(trial_dir=tmp_path / "trial")
+    trial_paths.mkdir()
+    trial_paths.test_stdout_path.write_text("")
+
+    message = _format_verifier_failure(
+        "make-doom-for-mips",
+        RuntimeError("Verifier timed out after 900s"),
+        trial_paths,
+    )
+
+    assert message == (
+        "Verifier failed for make-doom-for-mips: "
+        "Verifier timed out after 900s"
+    )

@@ -1,0 +1,9 @@
+# DOOD-safe base: no host bind mounts (host daemon can't see green's paths).
+# Files are transferred via `docker compose cp` instead.
+services:
+  main:
+    deploy:
+      resources:
+        limits:
+          cpus: ${CPUS}
+          memory: ${MEMORY}

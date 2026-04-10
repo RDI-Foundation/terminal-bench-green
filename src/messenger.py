@@ -1,4 +1,7 @@
+import brotli
+import gzip
 import json
+import zlib
 from uuid import uuid4
 
 import httpx
@@ -18,6 +21,52 @@ from a2a.types import (
 
 
 DEFAULT_TIMEOUT = 300
+
+
+def _try_decompress(data: bytes, encoding: str) -> bytes:
+    """Attempt to decompress data according to Content-Encoding, falling back to raw bytes."""
+    encoding = encoding.strip().lower()
+    try:
+        if encoding == "gzip":
+            return gzip.decompress(data)
+        if encoding == "deflate":
+            return zlib.decompress(data)
+        if encoding == "br":
+            return brotli.decompress(data)
+    except Exception:
+        pass
+    return data
+
+
+class _StripContentEncodingTransport(httpx.AsyncHTTPTransport):
+    """Strip Content-Encoding and decompress if needed.
+
+    The amber router may rewrite response bodies while leaving a stale
+    Content-Encoding header. httpx then either fails to decompress (body
+    already plain) or skips decompression (if we just strip the header but
+    the body is actually compressed). This transport reads the raw body,
+    decompresses if necessary, and returns plain bytes with no
+    Content-Encoding header so httpx uses IdentityDecoder.
+    """
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await super().handle_async_request(request)
+        encoding = response.headers.get("content-encoding")
+        if encoding:
+            raw = await response.aread()
+            body = _try_decompress(raw, encoding)
+            headers = [
+                (k, v)
+                for k, v in response.headers.raw
+                if k.lower() != b"content-encoding"
+            ]
+            return httpx.Response(
+                status_code=response.status_code,
+                headers=headers,
+                content=body,
+                extensions=response.extensions,
+            )
+        return response
 
 
 def create_message(
@@ -51,9 +100,13 @@ async def send_message(
     consumer: Consumer | None = None,
 ):
     """Returns dict with context_id, response and status (if exists)"""
-    async with httpx.AsyncClient(timeout=timeout) as httpx_client:
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        transport=_StripContentEncodingTransport(),
+    ) as httpx_client:
         resolver = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
         agent_card = await resolver.get_agent_card()
+        agent_card.url = base_url  # override to ensure A2A messages route via proxy
         config = ClientConfig(
             httpx_client=httpx_client,
             streaming=streaming,
@@ -120,6 +173,7 @@ class Messenger:
             base_url=url,
             context_id=None if new_conversation else self._context_ids.get(url, None),
             timeout=timeout,
+            streaming=True,
         )
         if outputs.get("status", "completed") != "completed":
             raise RuntimeError(f"{url} responded with: {outputs}")
